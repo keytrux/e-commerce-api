@@ -90,4 +90,68 @@ class ProductController extends Controller
             'data' => $product
         ]);
     }
+
+    /**
+     * Получить похожие товары
+     */
+    public function similar($id)
+    {
+        // Находим текущий товар
+        $product = Product::where('status', 'active')->find($id);
+        
+        if (!$product) {
+            return response()->json([
+                'message' => 'Product not found'
+            ], 404);
+        }
+
+        // Ищем похожие товары (по категории, бренду, ценовому диапазону)
+        $similarProducts = Product::with(['images' => function($query) {
+                $query->where('is_main', true);
+            }, 'brand'])
+            ->where('status', 'active')
+            ->where('id', '!=', $id)
+            ->where(function($query) use ($product) {
+                // Похожие по категории
+                $query->where('category_id', $product->category_id)
+                      // Или по бренду
+                      ->orWhere('brand_id', $product->brand_id);
+            })
+            // Похожий ценовой диапазон (±30%)
+            ->whereBetween('price', [
+                $product->price * 0.7,  // 70% от цены
+                $product->price * 1.3   // 130% от цены
+            ])
+            ->orderByRaw("CASE 
+                WHEN category_id = ? THEN 1 
+                WHEN brand_id = ? THEN 2 
+                ELSE 3 
+            END", [$product->category_id, $product->brand_id])
+            ->limit(8)
+            ->get();
+
+        // Если мало похожих товаров, добавляем популярные товары
+        if ($similarProducts->count() < 4) {
+            $additionalProducts = Product::with(['images' => function($query) {
+                    $query->where('is_main', true);
+                }, 'brand'])
+                ->where('status', 'active')
+                ->where('id', '!=', $id)
+                ->whereNotIn('id', $similarProducts->pluck('id')->toArray())
+                ->orderBy('views_count', 'desc')
+                ->limit(8 - $similarProducts->count())
+                ->get();
+            
+            $similarProducts = $similarProducts->merge($additionalProducts);
+        }
+
+        return response()->json([
+            'data' => $similarProducts,
+            'meta' => [
+                'total' => $similarProducts->count(),
+                'product_id' => $id,
+                'product_name' => $product->name,
+            ]
+        ]);
+    }
 }
